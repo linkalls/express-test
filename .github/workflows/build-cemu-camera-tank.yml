@@ -1,0 +1,140 @@
+# Unofficial Cemu build combining two unmerged upstream PRs.
+# Camera support: https://github.com/cemu-project/Cemu/pull/1815
+# TANK! TANK! TANK! GamePad rendering fix: https://github.com/cemu-project/Cemu/pull/2061
+#
+# This is separate from the existing Tank-only workflow. Both upstream PR
+# commits are pinned, to prevent unexpected source changes being compiled.
+name: Build Cemu Camera + Tank for Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - automation/cemu-camera-tank-combined-20261012
+    paths:
+      - ".github/workflows/build-cemu-camera-tank.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cemu-camera-tank-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-windows-x64:
+    name: Windows x64 / Camera PR 1815 + Tank PR 2061
+    runs-on: windows-2022
+    timeout-minutes: 300
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}\Cemu\dependencies\vcpkg
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: Cemu
+
+    steps:
+      # Pin the camera branch to the reviewed source commit.
+      - name: Check out Cemu camera PR and submodules
+        uses: actions/checkout@v4
+        with:
+          repository: cemu-project/Cemu
+          ref: refs/pull/1815/head
+          path: Cemu
+          submodules: recursive
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify pinned camera PR commit
+        run: |
+          $expectedCamera = 'aa0558983f14fb504b10e86f661418a6bdaa3990'
+          $actualCamera = (git rev-parse HEAD).Trim()
+          Write-Host "Camera PR #1815 commit: $actualCamera"
+          if ($actualCamera -ne $expectedCamera) {
+            throw "Camera PR #1815 changed; expected $expectedCamera, got $actualCamera. Review before updating."
+          }
+
+      # The Tank fix changes only LatteRenderTarget.cpp.
+      # Cherry-pick it onto the camera feature branch.
+      - name: Apply pinned Tank GamePad PR fix
+        run: |
+          $expectedTank = '338d18f574e9339a4a73db43bf232f67a4b31e15'
+          git fetch --no-tags origin refs/pull/2061/head
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Failed to fetch Tank PR #2061.'
+          }
+
+          $actualTank = (git rev-parse FETCH_HEAD).Trim()
+          Write-Host "Tank PR #2061 commit: $actualTank"
+          if ($actualTank -ne $expectedTank) {
+            throw "Tank PR #2061 changed; expected $expectedTank, got $actualTank. Review before updating."
+          }
+
+          git config user.name 'Cemu Combined Build CI'
+          git config user.email 'cemu-combined-ci@users.noreply.github.com'
+          git cherry-pick -x --no-edit $expectedTank
+          if ($LASTEXITCODE -ne 0) {
+            git status --short
+            throw 'The camera and Tank patches did not merge cleanly. Review conflicts instead of dropping either fix.'
+          }
+
+          # Ensure the expected graphics change is included in the new HEAD.
+          $changedPaths = @(git diff-tree --no-commit-id --name-only -r HEAD)
+          if ('src/Cafe/HW/Latte/Core/LatteRenderTarget.cpp' -notin $changedPaths) {
+            throw 'Tank rendering fix file was not changed by cherry-pick.'
+          }
+          git log -2 --oneline
+
+      - name: Set up CMake 3.29
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.29.0'
+
+      - name: Bootstrap vcpkg
+        run: |
+          & .\dependencies\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          if ($LASTEXITCODE -ne 0) { throw 'vcpkg bootstrap failed.' }
+
+      - name: Configure Windows x64 Release with camera support
+        run: |
+          # Enable SDL3 and the camera backend explicitly.
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_BUILD_TYPE=release `
+            -DENABLE_CAMERA=ON `
+            -DENABLE_SDL=ON `
+            -DVCPKG_INSTALL_OPTIONS=--clean-after-build
+          if ($LASTEXITCODE -ne 0) { throw 'CMake configuration failed.' }
+
+      - name: Build Cemu
+        run: |
+          cmake --build build --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw 'Cemu compilation failed.' }
+
+      - name: Prepare portable Windows build
+        run: |
+          if (-not (Test-Path 'bin\Cemu_release.exe')) {
+            throw 'Cemu_release.exe was not produced by the build.'
+          }
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Copy-Item -Path 'bin\*' -Destination dist -Recurse -Force
+          Rename-Item -Path 'dist\Cemu_release.exe' -NewName 'Cemu.exe'
+          Copy-Item -Path 'LICENSE.txt' -Destination 'dist\LICENSE.txt' -Force
+          @(
+            'Unofficial Cemu Windows x64 combined build'
+            'Feature 1: Camera input / Camera Settings (PR #1815)'
+            'Feature 2: TANK! TANK! TANK! GamePad 3D rendering fix (PR #2061)'
+            'Camera source: aa0558983f14fb504b10e86f661418a6bdaa3990'
+            'Tank fix: 338d18f574e9339a4a73db43bf232f67a4b31e15'
+            "Combined build commit: $((git rev-parse HEAD).Trim())"
+            'Source: https://github.com/cemu-project/Cemu'
+            'This is NOT an official Cemu release.'
+            'Camera capture and gameplay compatibility must be tested on a real Windows machine.'
+          ) | Set-Content -Path 'dist\BUILD_INFO.txt' -Encoding utf8
+
+      - name: Upload combined Windows x64 build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cemu-Camera-Tank-Fix-Windows-x64
+          path: Cemu/dist/
+          if-no-files-found: error
+          retention-days: 30
