@@ -1,0 +1,98 @@
+# Unofficial Cemu build with the TANK! TANK! TANK! GamePad 3D rendering fix.
+# Source: https://github.com/cemu-project/Cemu/pull/2061
+name: Build patched Cemu for Windows
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/build-cemu.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cemu-tank-fix-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-windows-x64:
+    name: Windows x64 / Cemu PR 2061
+    runs-on: windows-2022
+    timeout-minutes: 300
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}\Cemu\dependencies\vcpkg
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: Cemu
+    steps:
+      - name: Check out Cemu PR 2061 and submodules
+        uses: actions/checkout@v4
+        with:
+          repository: cemu-project/Cemu
+          ref: refs/pull/2061/head
+          path: Cemu
+          submodules: recursive
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify the reviewed fix commit
+        run: |
+          # Refuse to build unreviewed PR updates.
+          $expected = '338d18f574e9339a4a73db43bf232f67a4b31e15'
+          $actual = (git rev-parse HEAD).Trim()
+          Write-Host "Cemu source commit: $actual"
+          if ($actual -ne $expected) {
+            throw "PR #2061 changed from $expected to $actual. Review changes first."
+          }
+
+      - name: Set up CMake 3.29
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.29.0'
+
+      - name: Bootstrap vcpkg
+        run: |
+          # Use the revision required by the Cemu repository.
+          & .\dependencies\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          if ($LASTEXITCODE -ne 0) { throw 'vcpkg bootstrap failed.' }
+
+      - name: Configure Windows x64 Release
+        run: |
+          # Compiles the dependencies on the GitHub-hosted Windows runner.
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_BUILD_TYPE=release `
+            -DVCPKG_INSTALL_OPTIONS=--clean-after-build
+          if ($LASTEXITCODE -ne 0) { throw 'CMake configuration failed.' }
+
+      - name: Build Cemu
+        run: |
+          cmake --build build --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw 'Cemu compilation failed.' }
+
+      - name: Prepare portable Cemu files
+        run: |
+          # The official Cemu Windows job expects bin/Cemu_release.exe.
+          if (-not (Test-Path 'bin\Cemu_release.exe')) {
+            throw 'Cemu_release.exe was not produced.'
+          }
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Copy-Item -Path 'bin\*' -Destination dist -Recurse -Force
+          Rename-Item -Path 'dist\Cemu_release.exe' -NewName 'Cemu.exe'
+          Copy-Item -Path 'LICENSE.txt' -Destination 'dist\LICENSE.txt' -Force
+          @(
+            'Unofficial Cemu Windows x64 build'
+            'Fix: TANK! TANK! TANK! GamePad 3D scene (PR #2061)'
+            "Source commit: $((git rev-parse HEAD).Trim())"
+            'Source: https://github.com/cemu-project/Cemu/pull/2061'
+            'This is NOT an official Cemu release.'
+          ) | Set-Content -Path 'dist\BUILD_INFO.txt' -Encoding utf8
+
+      - name: Upload Cemu Windows x64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cemu-TankTankTank-GamePad-Fix-Windows-x64
+          path: Cemu/dist/
+          if-no-files-found: error
+          retention-days: 30
