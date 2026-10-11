@@ -39,7 +39,7 @@ jobs:
       - name: Check out build configuration
         uses: actions/checkout@v4
         with:
-          path: builder
+          # Check out at GITHUB_WORKSPACE, so builder/triplets/... exists here.
           persist-credentials: false
 
       - name: Check out patched Cemu PR 2061 and submodules
