@@ -1,0 +1,246 @@
+# Builds an unofficial, ready-to-extract Cemu Windows x64 Release ZIP.
+# Includes the reviewed fix for TANK! TANK! TANK! GamePad 3D rendering:
+# https://github.com/cemu-project/Cemu/pull/2061
+#
+# This workflow is separate from the original build-cemu.yml.
+# The original in-progress build is not modified or cancelled.
+name: Build Cemu Portable Release (cached)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-cemu-release.yml'
+      - 'builder/triplets/x64-windows-static-release.cmake'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cemu-portable-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-windows-x64-release:
+    name: Windows x64 / Release only / vcpkg cache / portable ZIP
+    runs-on: windows-2022
+    timeout-minutes: 300
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}/Cemu/dependencies/vcpkg
+      # vcpkg archives all built dependencies in this directory.
+      # actions/cache saves the directory when this job succeeds.
+      VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/vcpkg_binary_cache,readwrite'
+      VCPKG_FORCE_DOWNLOADED_BINARIES: '1'
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Check out build configuration
+        uses: actions/checkout@v4
+        with:
+          path: builder
+          persist-credentials: false
+
+      - name: Check out patched Cemu PR 2061 and submodules
+        uses: actions/checkout@v4
+        with:
+          repository: cemu-project/Cemu
+          ref: refs/pull/2061/head
+          path: Cemu
+          submodules: recursive
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify pinned source and release-only triplet
+        working-directory: Cemu
+        run: |
+          # Re-check the PR SHA to avoid compiling any unexpected change.
+          $expectedSha = '338d18f574e9339a4a73db43bf232f67a4b31e15'
+          $actualSha = (git rev-parse HEAD).Trim()
+          Write-Host "Cemu PR source SHA: $actualSha"
+          if ($actualSha -ne $expectedSha) {
+            throw "PR #2061 changed! Expected $expectedSha, got $actualSha"
+          }
+
+          # This file overrides the default x64-windows-static triplet.
+          # VCPKG_BUILD_TYPE=release is what disables Debug dependency builds.
+          $triplet = Join-Path $env:GITHUB_WORKSPACE 'builder/triplets/x64-windows-static-release.cmake'
+          if (-not (Test-Path -LiteralPath $triplet)) {
+            throw "Missing release-only triplet: $triplet"
+          }
+          $tripletContents = Get-Content -LiteralPath $triplet -Raw
+          if ($tripletContents -notmatch 'set\(VCPKG_BUILD_TYPE release\)') {
+            throw 'The vcpkg triplet must build Release dependencies only.'
+          }
+
+      - name: Set up CMake 3.29
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.29.0'
+
+      - name: Bootstrap vcpkg
+        working-directory: Cemu
+        run: |
+          & .\dependencies\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          if ($LASTEXITCODE -ne 0) { throw 'vcpkg bootstrap failed.' }
+
+      - name: Restore and save vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: vcpkg_binary_cache
+          key: cemu-vcpkg-win-x64-release-v1-${{ hashFiles('Cemu/vcpkg.json', 'Cemu/vcpkg-configuration.json', 'builder/triplets/x64-windows-static-release.cmake') }}
+          restore-keys: |
+            cemu-vcpkg-win-x64-release-v1-
+
+      - name: Configure Release x64 (without Debug dependencies)
+        working-directory: Cemu
+        run: |
+          # CMake calls vcpkg and reuses cached dependency archives when possible.
+          # Use the custom triplet for the target architecture.
+          $tripletDir = Join-Path $env:GITHUB_WORKSPACE 'builder/triplets'
+          New-Item -ItemType Directory -Path (Join-Path $env:GITHUB_WORKSPACE 'vcpkg_binary_cache') -Force | Out-Null
+
+          & cmake -S . -B build -G 'Visual Studio 17 2022' -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static-release `
+            "-DVCPKG_OVERLAY_TRIPLETS=$tripletDir" `
+            '-DVCPKG_INSTALL_OPTIONS=--clean-after-build' `
+            -DALLOW_PORTABLE=ON
+
+          if ($LASTEXITCODE -ne 0) { throw 'CMake configuration failed.' }
+
+      - name: Compile Cemu Release
+        working-directory: Cemu
+        run: |
+          # Building only the Release configuration of Cemu itself.
+          & cmake --build build --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw 'Cemu Release build failed.' }
+
+      - name: Package complete portable Cemu as an extract-and-run ZIP
+        working-directory: Cemu
+        run: |
+          # The official portable archive contains all contents of Cemu/bin:
+          # Cemu.exe, resources/, gameProfiles/, and runtime dependencies.
+          $sourceBin = Join-Path (Get-Location) 'bin'
+          $sourceExe = Join-Path $sourceBin 'Cemu_release.exe'
+          if (-not (Test-Path -LiteralPath $sourceExe)) {
+            throw 'Cemu_release.exe is missing.'
+          }
+
+          $releaseRoot = Join-Path $env:GITHUB_WORKSPACE 'release'
+          $folderName = 'Cemu-TankGamePad-Fix-Windows-x64'
+          $stage = Join-Path $releaseRoot $folderName
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+
+          # Copy all official static/runtime resources, not only the EXE.
+          Copy-Item -Path (Join-Path $sourceBin '*') -Destination $stage -Recurse -Force
+          Rename-Item -LiteralPath (Join-Path $stage 'Cemu_release.exe') -NewName 'Cemu.exe'
+          Copy-Item -LiteralPath 'LICENSE.txt' -Destination (Join-Path $stage 'LICENSE.txt') -Force
+
+          # Portable mode keeps settings and saved metadata inside this folder,
+          # separate from any previously installed Cemu configuration.
+          $portable = Join-Path $stage 'portable'
+          New-Item -ItemType Directory -Path $portable -Force | Out-Null
+          @'
+          Cemu portable data lives in this folder.
+          Do not delete this folder if you want settings to remain portable.
+          Wii U game files and keys are not included.
+          '@.Trim() | Set-Content -LiteralPath (Join-Path $portable 'README.txt') -Encoding utf8
+
+          @'
+          Cemu - Unofficial TANK! TANK! TANK! GamePad rendering fix
+          ==========================================================
+
+          Start: Extract this ZIP, open the Cemu-TankGamePad-Fix-Windows-x64 folder,
+          and double-click Cemu.exe. No Cemu installation is needed.
+
+          Includes:
+          - Windows x64 Cemu Release build
+          - Fix for missing GamePad 3D scene in TANK! TANK! TANK!
+          - resources/ and gameProfiles/ from the Cemu source
+          - portable/ folder for separate settings and data
+          - Upstream Cemu MPL 2.0 license
+
+          Important:
+          - This is an UNOFFICIAL build, not a Cemu Project release.
+          - No copyrighted Wii U games, firmware, keys or DLC are included.
+          - Keep existing Cemu 1.x/2.x installs in separate folders.
+          - Game compatibility is not guaranteed.
+
+          Cemu: https://github.com/cemu-project/Cemu
+          Upstream fix: https://github.com/cemu-project/Cemu/pull/2061
+          '@.Trim() | Set-Content -LiteralPath (Join-Path $stage 'README-FIRST.txt') -Encoding utf8
+
+          # Sanity checks before publishing.
+          foreach ($required in @('Cemu.exe', 'resources', 'gameProfiles', 'portable', 'LICENSE.txt')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $stage $required))) {
+              throw "Portable package missing: $required"
+            }
+          }
+
+          $zipPath = Join-Path $releaseRoot ($folderName + '.zip')
+          Compress-Archive -LiteralPath $stage -DestinationPath $zipPath -CompressionLevel Optimal -Force
+
+          # Confirm this is a valid zip with the expected entry points.
+          Add-Type -AssemblyName System.IO.Compression
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+          try {
+            $names = @($archive.Entries | ForEach-Object { $_.FullName })
+            $expectedEntry = "$folderName/Cemu.exe"
+            if (-not ($names -contains $expectedEntry)) {
+              throw "Archive is missing $expectedEntry"
+            }
+            if (-not ($names | Where-Object { $_ -like "$folderName/resources/*" })) {
+              throw 'Archive is missing resource files.'
+            }
+            if (-not ($names | Where-Object { $_ -like "$folderName/gameProfiles/*" })) {
+              throw 'Archive is missing game profile files.'
+            }
+            Write-Host "Portable ZIP verified: $zipPath"
+          }
+          finally {
+            $archive.Dispose()
+          }
+
+      - name: Upload complete portable ZIP as Actions artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cemu-TankGamePad-Fix-Windows-x64-Portable
+          path: release/*.zip
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Publish GitHub prerelease with direct ZIP download
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # A release asset is a directly downloadable ZIP (not a ZIP inside
+          # the artifact wrapper). It is intentionally marked unofficial.
+          $tag = "tank-gamepad-fix-build-${{ github.run_number }}"
+          $zipPath = Join-Path $env:GITHUB_WORKSPACE 'release/Cemu-TankGamePad-Fix-Windows-x64.zip'
+          $notesPath = Join-Path $env:RUNNER_TEMP 'cemu-release-notes.md'
+
+          @'
+          Unofficial Windows x64 Release build of Cemu with the GamePad 3D scene
+          fix for TANK! TANK! TANK! from cemu-project/Cemu PR #2061.
+
+          Download the Windows x64 ZIP from Assets, extract it once, and launch
+          Cemu.exe inside the extracted folder. resources/, gameProfiles/,
+          and portable/ are included. Existing Cemu installs are untouched.
+
+          Source patch: https://github.com/cemu-project/Cemu/pull/2061
+          Pinned Cemu commit: 338d18f574e9339a4a73db43bf232f67a4b31e15
+
+          This is not an official Cemu Project release. No games or keys included.
+          '@.Trim() | Set-Content -LiteralPath $notesPath -Encoding utf8
+
+          & gh release create $tag $zipPath `
+            --repo $env:GITHUB_REPOSITORY `
+            --target $env:GITHUB_SHA `
+            --title "Unofficial Cemu TANK! TANK! TANK! GamePad Fix (Windows x64) #${{ github.run_number }}" `
+            --notes-file $notesPath `
+            --prerelease `
+            --latest=false
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed.' }
