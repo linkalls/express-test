@@ -35,6 +35,7 @@ class MainActivity : Activity() {
     private lateinit var wifiSurface: SurfaceView
     private lateinit var wifiHost: EditText
     private lateinit var wifiPin: EditText
+    private lateinit var wifiToken: EditText
     private lateinit var wifiButton: Button
     private var wifiClient: WifiGamePadClient? = null
 
@@ -90,6 +91,13 @@ class MainActivity : Activity() {
             textSize = 12f
             inputType = InputType.TYPE_CLASS_TEXT
         }
+        wifiToken = EditText(this).apply {
+            hint = "PCトークン（32桁）"
+            setSingleLine()
+            setText(prefs.getString("token", ""))
+            textSize = 12f
+            inputType = InputType.TYPE_CLASS_TEXT
+        }
         wifiButton = Button(this).apply {
             text = "Wi-Fi TLSで接続"
             setOnClickListener {
@@ -102,16 +110,17 @@ class MainActivity : Activity() {
                 } else {
                     val host = wifiHost.text.toString().trim()
                     val pin = wifiPin.text.toString().trim()
+                    val token = wifiToken.text.toString().trim()
                     if (!wifiSurface.holder.surface.isValid) {
                         status.text = "Surface未準備。再試行してね"
                         return@setOnClickListener
                     }
-                    prefs.edit().putString("host", host).putString("pin", pin).apply()
+                    prefs.edit().putString("host", host).putString("pin", pin).putString("token", token).apply()
                     disconnect()
                     try {
                         wifiSurface.visibility = View.VISIBLE
                         image.visibility = View.GONE
-                        val client = WifiGamePadClient(host, pin, wifiSurface.holder.surface) {
+                        val client = WifiGamePadClient(host, pin, token, wifiSurface.holder.surface) {
                             message -> runOnUiThread { status.text = message }
                         }
                         client.start()
@@ -127,6 +136,7 @@ class MainActivity : Activity() {
         }
         wifiControls.addView(wifiHost, LinearLayout.LayoutParams(0, -2, 1f))
         wifiControls.addView(wifiPin, LinearLayout.LayoutParams(0, -2, 2f))
+        wifiControls.addView(wifiToken, LinearLayout.LayoutParams(0, -2, 1f))
         wifiControls.addView(wifiButton, LinearLayout.LayoutParams(-2, -2))
         root.addView(wifiControls)
         val display = FrameLayout(this)
