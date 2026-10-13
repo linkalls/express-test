@@ -1,4 +1,5 @@
 // Compile-only smoke test, using a stub for the Cemu Renderer interface.
+#define REMOTE_GAMEPAD_VIDEO_MOCK 1
 #include "RemoteGamePadBridge.h"
 #include <type_traits>
 
