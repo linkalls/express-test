@@ -12,6 +12,7 @@ on:
     branches:
       - automation/cemu-camera-tank-combined-20261012
       - feature/cemu-native-remote-gamepad-usb
+      - feature/cemu-remote-60fps-h264-wifi
     paths:
       - ".github/workflows/build-cemu-camera-tank.yml"
       - "remote-gamepad/native/**"
