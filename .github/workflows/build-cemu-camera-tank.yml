@@ -4,15 +4,17 @@
 #
 # This is separate from the existing Tank-only workflow. Both upstream PR
 # commits are pinned, to prevent unexpected source changes being compiled.
-name: Build Cemu Camera + Tank for Windows
+name: Build Cemu Camera + Tank + Native USB GamePad
 
 on:
   workflow_dispatch:
   push:
     branches:
       - automation/cemu-camera-tank-combined-20261012
+      - feature/cemu-native-remote-gamepad-usb
     paths:
       - ".github/workflows/build-cemu-camera-tank.yml"
+      - "remote-gamepad/native/**"
 
 permissions:
   contents: read
@@ -23,7 +25,7 @@ concurrency:
 
 jobs:
   build-windows-x64:
-    name: Windows x64 / Camera PR 1815 + Tank PR 2061
+    name: Windows x64 / Camera + Tank + Native USB GamePad
     runs-on: windows-2022
     timeout-minutes: 300
     env:
@@ -85,6 +87,23 @@ jobs:
           }
           git log -2 --oneline
 
+      # Pull our overlay from the same branch/commit that triggered this run.
+      - name: Check out native GamePad overlay
+        uses: actions/checkout@v4
+        with:
+          path: remote-overlay
+          persist-credentials: false
+
+      - name: Apply native DRC and VPAD USB bridge
+        run: |
+          $overlay = Join-Path $env:GITHUB_WORKSPACE 'remote-overlay/remote-gamepad/native'
+          $script = Join-Path $overlay 'apply_native_bridge.py'
+          $header = Join-Path $overlay 'RemoteGamePadBridge.h'
+          python $script . $header
+          if ($LASTEXITCODE -ne 0) { throw 'Native USB GamePad patch failed.' }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'Native GamePad patch has whitespace errors.' }
+
       - name: Set up CMake 3.29
         uses: jwlawson/actions-setup-cmake@v2
         with:
@@ -123,6 +142,9 @@ jobs:
             'Unofficial Cemu Windows x64 combined build'
             'Feature 1: Camera input / Camera Settings (PR #1815)'
             'Feature 2: TANK! TANK! TANK! GamePad 3D rendering fix (PR #2061)'
+            'Feature 3: experimental GamePad native RGB readback + USB touch bridge'
+            'USB: adb reverse tcp:49222 tcp:49222'
+            'WARNING: prototype native screenshot readback is throttled to ~8 fps and Vulkan can stall.'
             'Camera source: aa0558983f14fb504b10e86f661418a6bdaa3990'
             'Tank fix: 338d18f574e9339a4a73db43bf232f67a4b31e15'
             "Combined build commit: $((git rev-parse HEAD).Trim())"
@@ -134,7 +156,7 @@ jobs:
       - name: Upload combined Windows x64 build
         uses: actions/upload-artifact@v4
         with:
-          name: Cemu-Camera-Tank-Fix-Windows-x64
+          name: Cemu-Camera-Tank-NativeUSB-Windows-x64
           path: Cemu/dist/
           if-no-files-found: error
           retention-days: 30
