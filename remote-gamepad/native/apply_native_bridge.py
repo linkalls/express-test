@@ -86,6 +86,8 @@ def patch_opengl(cemu: Path) -> None:
     source = target.read_text(encoding="utf-8")
     if 'remote/RemoteGamePadAsyncGL.inc' in source:
         raise RuntimeError("OpenGL async capture overlay already applied")
+    # Load Winsock2/OpenSSL before platform window headers can pull winsock.h.
+    source = '#include "remote/RemoteGamePadVideo.h"\n' + source
     source = replace_once(
         source,
         '#include "config/LaunchSettings.h"',
@@ -119,6 +121,7 @@ def patch_vulkan(cemu: Path) -> None:
 
     target = cemu / "src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.cpp"
     original = target.read_text(encoding="utf-8")
+    original = '#include "remote/RemoteGamePadVideo.h"\n' + original
     anchor = "void VulkanRenderer::HandleScreenshotRequest(LatteTextureView* texView, bool padView)\n{\n"
     added = (
         "    // Zero-wait native Vulkan DRC export (only if Wi-Fi is connected).\n"
