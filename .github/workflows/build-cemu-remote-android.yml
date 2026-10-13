@@ -6,6 +6,7 @@ on:
   push:
     branches:
       - feature/cemu-native-remote-gamepad-usb
+      - feature/cemu-remote-60fps-h264-wifi
     paths:
       - 'remote-gamepad/android/**'
       - '.github/workflows/build-cemu-remote-android.yml'

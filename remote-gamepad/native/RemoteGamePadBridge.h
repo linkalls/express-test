@@ -28,6 +28,20 @@
 #include <vector>
 
 #include "Cafe/HW/Latte/Renderer/Renderer.h"
+#ifndef REMOTE_GAMEPAD_VIDEO_MOCK
+#include "remote/RemoteGamePadVideo.h"
+#else
+// Unit-test-only adapter: the real build always includes OpenSSL/TLS backend.
+#include <functional>
+namespace RemoteGamePadVideo {
+    // Compile-test-only switch: simulate an authenticated TLS peer without
+    // creating sockets or depending on a real Cemu/Vulkan/OpenGL runtime.
+    inline bool mockConnected = false;
+    inline void Start(std::function<void(const uint8_t*, size_t)>) {}
+    inline bool Connected() { return mockConnected; }
+    inline void OfferFrame(std::vector<uint8_t>, int, int) {}
+}
+#endif
 
 namespace RemoteGamePad
 {
@@ -205,6 +219,12 @@ namespace RemoteGamePad
         std::call_once(detail::serverOnce, [] {
             std::thread([] { detail::ServerLoop(); }).detach();
         });
+        // Wi-Fi is opt-in. Its channel is TLS1.3 and requires a manually
+        // verified SHA256 fingerprint on Android (no unauthenticated LAN).
+        RemoteGamePadVideo::Start([](const uint8_t* bytes, size_t length) {
+            std::vector<uint8_t> control(bytes, bytes + length);
+            detail::ProcessTouchPackets(control);
+        });
     }
 
     inline bool Connected()
@@ -214,7 +234,8 @@ namespace RemoteGamePad
 
     inline bool GetPressedTouch(float& normalizedX, float& normalizedY)
     {
-        if (!Connected() || !detail::touchPressed.load(std::memory_order_acquire))
+        if ((!Connected() && !RemoteGamePadVideo::Connected()) ||
+            !detail::touchPressed.load(std::memory_order_acquire))
             return false;
         normalizedX = static_cast<float>(detail::touchX.load(std::memory_order_relaxed)) / 65535.0f;
         normalizedY = static_cast<float>(detail::touchY.load(std::memory_order_relaxed)) / 65535.0f;
@@ -226,7 +247,7 @@ namespace RemoteGamePad
     // by Cemu's existing screenshot machinery.
     inline void RequestNativeFrameIfDue(Renderer* renderer)
     {
-        if (!Connected() || !renderer)
+        if ((!Connected() && !RemoteGamePadVideo::Connected()) || !renderer)
             return;
 
         const uint64_t now = detail::MonotonicMs();
@@ -244,7 +265,7 @@ namespace RemoteGamePad
             -> std::optional<std::string>
         {
             detail::capturePending.store(false, std::memory_order_release);
-            if (mainWindow || !Connected() || width <= 0 || height <= 0 ||
+            if (mainWindow || (!Connected() && !RemoteGamePadVideo::Connected()) || width <= 0 || height <= 0 ||
                 width > 4096 || height > 4096 ||
                 rgb.size() != static_cast<size_t>(width) * static_cast<size_t>(height) * 3)
                 return std::nullopt;
@@ -253,6 +274,9 @@ namespace RemoteGamePad
             frame.height = static_cast<uint32_t>(height);
             frame.sequence = detail::nextSequence.fetch_add(1);
             frame.rgb = rgb;
+            if (RemoteGamePadVideo::Connected())
+                RemoteGamePadVideo::OfferFrame(frame.rgb, width, height);
+            if (!Connected()) return std::nullopt;
             std::lock_guard lock(detail::frameMutex);
             detail::latestFrame = std::move(frame);
             return std::nullopt;
