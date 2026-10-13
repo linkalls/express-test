@@ -163,19 +163,19 @@ inline bool sslReadExact(SSL* connection, unsigned char* bytes, size_t length)
 inline std::unique_ptr<SSL_CTX, decltype(&SSL_CTX_free)> sslContext()
 {
     std::unique_ptr<SSL_CTX, decltype(&SSL_CTX_free)> ctx(SSL_CTX_new(TLS_server_method()), SSL_CTX_free);
-    if (!ctx) return nullptr;
+    if (!ctx) return {nullptr, SSL_CTX_free};
     SSL_CTX_set_min_proto_version(ctx.get(), TLS1_3_VERSION);
     auto path = configDir() / "wifi-identity.pem";
-    if (!std::filesystem::exists(path) && !createCertificate(path)) return nullptr;
+    if (!std::filesystem::exists(path) && !createCertificate(path)) return {nullptr, SSL_CTX_free};
     const auto file = path.string();
     if (SSL_CTX_use_certificate_file(ctx.get(), file.c_str(), SSL_FILETYPE_PEM) != 1 ||
         SSL_CTX_use_PrivateKey_file(ctx.get(), file.c_str(), SSL_FILETYPE_PEM) != 1 ||
-        SSL_CTX_check_private_key(ctx.get()) != 1) return nullptr;
+        SSL_CTX_check_private_key(ctx.get()) != 1) return {nullptr, SSL_CTX_free};
 
     X509* cert = SSL_CTX_get0_certificate(ctx.get());
     unsigned char digest[EVP_MAX_MD_SIZE]{};
     unsigned int len = 0;
-    if (X509_digest(cert, EVP_sha256(), digest, &len) != 1 || len != 32) return nullptr;
+    if (X509_digest(cert, EVP_sha256(), digest, &len) != 1 || len != 32) return {nullptr, SSL_CTX_free};
     const char* chars = "0123456789ABCDEF";
     std::string fingerprint;
     for (unsigned i = 0; i < len; ++i) {
