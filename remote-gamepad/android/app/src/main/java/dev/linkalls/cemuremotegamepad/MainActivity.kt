@@ -7,6 +7,10 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.SurfaceView
+import android.widget.FrameLayout
+import android.widget.EditText
+import android.text.InputType
 import android.widget.Button
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -28,6 +32,11 @@ class MainActivity : Activity() {
     private lateinit var image: ImageView
     private lateinit var status: TextView
     private lateinit var button: Button
+    private lateinit var wifiSurface: SurfaceView
+    private lateinit var wifiHost: EditText
+    private lateinit var wifiPin: EditText
+    private lateinit var wifiButton: Button
+    private var wifiClient: WifiGamePadClient? = null
 
     @Volatile private var active = false
     @Volatile private var peer: Socket? = null
@@ -62,6 +71,65 @@ class MainActivity : Activity() {
         toolbar.addView(status, LinearLayout.LayoutParams(0, -2, 1f))
         toolbar.addView(button, LinearLayout.LayoutParams(-2, -2))
         root.addView(toolbar)
+        val wifiControls = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(8, 4, 8, 4)
+        }
+        val prefs = getSharedPreferences("cemu-remote-wifi", MODE_PRIVATE)
+        wifiHost = EditText(this).apply {
+            hint = "PCのIPv4アドレス"
+            setSingleLine()
+            setText(prefs.getString("host", ""))
+            textSize = 12f
+            inputType = InputType.TYPE_CLASS_TEXT
+        }
+        wifiPin = EditText(this).apply {
+            hint = "PC証明書SHA256 (64桁)"
+            setSingleLine()
+            setText(prefs.getString("pin", ""))
+            textSize = 12f
+            inputType = InputType.TYPE_CLASS_TEXT
+        }
+        wifiButton = Button(this).apply {
+            text = "Wi-Fi TLSで接続"
+            setOnClickListener {
+                if (wifiClient != null) {
+                    wifiClient?.stop()
+                    wifiClient = null
+                    wifiSurface.visibility = View.GONE
+                    image.visibility = View.VISIBLE
+                    text = "Wi-Fi TLSで接続"
+                } else {
+                    val host = wifiHost.text.toString().trim()
+                    val pin = wifiPin.text.toString().trim()
+                    if (!wifiSurface.holder.surface.isValid) {
+                        status.text = "Surface未準備。再試行してね"
+                        return@setOnClickListener
+                    }
+                    prefs.edit().putString("host", host).putString("pin", pin).apply()
+                    disconnect()
+                    try {
+                        wifiSurface.visibility = View.VISIBLE
+                        image.visibility = View.GONE
+                        val client = WifiGamePadClient(host, pin, wifiSurface.holder.surface) {
+                            message -> runOnUiThread { status.text = message }
+                        }
+                        client.start()
+                        wifiClient = client
+                        text = "Wi-Fi切断"
+                    } catch (error: Exception) {
+                        wifiSurface.visibility = View.GONE
+                        image.visibility = View.VISIBLE
+                        status.text = "Wi-Fi設定エラー: " + error.message
+                    }
+                }
+            }
+        }
+        wifiControls.addView(wifiHost, LinearLayout.LayoutParams(0, -2, 1f))
+        wifiControls.addView(wifiPin, LinearLayout.LayoutParams(0, -2, 2f))
+        wifiControls.addView(wifiButton, LinearLayout.LayoutParams(-2, -2))
+        root.addView(wifiControls)
+        val display = FrameLayout(this)
         image = ImageView(this).apply {
             setBackgroundColor(Color.BLACK)
             scaleType = ImageView.ScaleType.FIT_CENTER
@@ -71,7 +139,16 @@ class MainActivity : Activity() {
                 true
             }
         }
-        root.addView(image, LinearLayout.LayoutParams(-1, 0, 1f))
+        display.addView(image, FrameLayout.LayoutParams(-1, -1))
+        wifiSurface = SurfaceView(this).apply {
+            visibility = View.GONE
+            setOnTouchListener { _, event ->
+                sendWifiTouch(event)
+                true
+            }
+        }
+        display.addView(wifiSurface, FrameLayout.LayoutParams(-1, -1))
+        root.addView(display, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(root)
     }
 
@@ -144,6 +221,25 @@ class MainActivity : Activity() {
         }, "Cemu-GamePad-USB").start()
     }
 
+    private fun sendWifiTouch(event: MotionEvent) {
+        val down = when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> true
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> false
+            else -> return
+        }
+        val sw = wifiSurface.width.toFloat()
+        val sh = wifiSurface.height.toFloat()
+        if (sw <= 0f || sh <= 0f) return
+        val sourceW = 854f
+        val sourceH = 480f
+        val scale = min(sw / sourceW, sh / sourceH)
+        val drawW = sourceW * scale
+        val drawH = sourceH * scale
+        val x = ((event.x - (sw - drawW) / 2) / drawW).coerceIn(0f, 1f)
+        val y = ((event.y - (sh - drawH) / 2) / drawH).coerceIn(0f, 1f)
+        wifiClient?.touch(x, y, down)
+    }
+
     private fun littleEndianInt(data: ByteArray, offset: Int): Int {
         return (data[offset].toInt() and 255) or
             ((data[offset + 1].toInt() and 255) shl 8) or
@@ -198,6 +294,8 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        wifiClient?.stop()
+        wifiClient = null
         disconnect()
         super.onDestroy()
     }
