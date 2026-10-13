@@ -19,12 +19,14 @@
 #include <ws2tcpip.h>
 #include <windows.h>
 #include <openssl/ssl.h>
+#include <openssl/rsa.h>
 #include <openssl/err.h>
 #include <openssl/pem.h>
 #include <openssl/x509.h>
 #include <openssl/evp.h>
 #include <openssl/sha.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -282,8 +284,10 @@ inline void clientSession(SSL_CTX* context, SOCKET socket)
         running.store(false);
         clientConnected.store(false);
         cv.notify_all();
+        // Close FFmpeg pipes before joining workers. WriteFile/ReadFile may
+        // otherwise remain blocked if the encoder or network stops responding.
+        encoder.stop();
         if (inputWorker.joinable()) inputWorker.join();
-        encoder.stop(); // Unblocks ReadFile waiting for FFmpeg stdout.
         if (outputWorker.joinable()) outputWorker.join();
         SSL_shutdown(ssl);
         SSL_free(ssl);
@@ -362,7 +366,7 @@ inline void clientSession(SSL_CTX* context, SOCKET socket)
         timeval tv{0, 25000};
         const int ready = select(0, &fd, nullptr, nullptr, &tv);
         if (ready == SOCKET_ERROR) break;
-        if (ready > 0) {
+        if (ready > 0 || SSL_pending(ssl) > 0) {
             uint8_t buf[256]{};
             int n = 0;
             {
@@ -413,8 +417,10 @@ inline void server()
 inline void Start(std::function<void(const uint8_t*, size_t)> onTouch)
 {
     if (detail::env("CEMU_REMOTE_WIFI") != "1") return;
-    detail::touchConsumer = std::move(onTouch);
-    std::call_once(detail::started, [] { std::thread(detail::server).detach(); });
+    std::call_once(detail::started, [callback = std::move(onTouch)]() mutable {
+        detail::touchConsumer = std::move(callback);
+        std::thread(detail::server).detach();
+    });
 }
 inline bool Connected()
 {
