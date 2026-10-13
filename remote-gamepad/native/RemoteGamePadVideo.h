@@ -467,7 +467,9 @@ inline void server()
     sockaddr_in address{};
     address.sin_family = AF_INET;
     address.sin_port = htons(49224);
-    address.sin_addr.s_addr = htonl(INADDR_ANY);
+    // USB H264 uses loopback only; Wi-Fi explicitly allows trusted LAN.
+    const bool wifiEnabled = env("CEMU_REMOTE_WIFI") == "1";
+    address.sin_addr.s_addr = htonl(wifiEnabled ? INADDR_ANY : INADDR_LOOPBACK);
     if (bind(listener, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) == SOCKET_ERROR ||
         listen(listener, 1) == SOCKET_ERROR) {
         report("Wi-Fi port 49224 unavailable; check Windows Firewall");
@@ -475,7 +477,8 @@ inline void server()
         WSACleanup();
         return;
     }
-    report("TLS 1.3 Wi-Fi video listening on port 49224");
+    report(std::string("TLS 1.3 H264 listening on ") +
+           (wifiEnabled ? "private LAN" : "USB loopback") + " port 49224");
     for (;;) {
         SOCKET client = accept(listener, nullptr, nullptr);
         if (client != INVALID_SOCKET) clientSession(context.get(), client);
@@ -485,7 +488,8 @@ inline void server()
 
 inline void Start(std::function<void(const uint8_t*, size_t)> onTouch)
 {
-    if (detail::env("CEMU_REMOTE_WIFI") != "1") return;
+    if (detail::env("CEMU_REMOTE_WIFI") != "1" &&
+        detail::env("CEMU_REMOTE_H264_USB") != "1") return;
     std::call_once(detail::started, [callback = std::move(onTouch)]() mutable {
         detail::touchConsumer = std::move(callback);
         std::thread(detail::server).detach();
