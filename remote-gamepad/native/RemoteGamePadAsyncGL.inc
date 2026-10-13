@@ -39,6 +39,20 @@ inline void ResetPending(Slot& slot)
     }
     slot.pending = false;
 }
+inline void Shutdown()
+{
+    for (auto& slot : slots()) {
+        if (slot.fence) {
+            glDeleteSync(slot.fence);
+            slot.fence = nullptr;
+        }
+        if (slot.buffer) {
+            glDeleteBuffers(1, &slot.buffer);
+            slot.buffer = 0;
+        }
+        slot.pending = false;
+    }
+}
 inline void Capture(LatteTextureView* view, bool padView)
 {
     if (!padView || !RemoteGamePadVideo::Connected() || !view ||
