@@ -94,6 +94,10 @@ void VulkanRenderer::RemoteGamePadCaptureAsync(LatteTextureView* textureView, bo
 
     const VkDevice device = m_logicalDevice;
     auto& ring = RemoteGamePadAsyncVk::slots();
+    for (auto& slot : ring) {
+        if (slot.device != VK_NULL_HANDLE && slot.device != device)
+            slot = {}; // Old VkDevice was destroyed; driver owns that cleanup.
+    }
 
     // Poll only Cemu's completed command-buffer serials. NO GPU WAIT.
     for (auto& slot : ring) {
@@ -178,4 +182,16 @@ void VulkanRenderer::RemoteGamePadCaptureAsync(LatteTextureView* textureView, bo
     slot->width = width;
     slot->height = height;
     slot->pending = true;
+}
+
+void VulkanRenderer::RemoteGamePadReleaseAsync()
+{
+    // Shutdown() has already submitted and waited for all GPU work.
+    // Destroy mapped staging buffers before the VkDevice is destroyed.
+    for (auto& slot : RemoteGamePadAsyncVk::slots()) {
+        if (slot.device == m_logicalDevice)
+            RemoteGamePadAsyncVk::destroy(slot);
+        else
+            slot = {}; // Do not touch objects owned by an old destroyed device.
+    }
 }
