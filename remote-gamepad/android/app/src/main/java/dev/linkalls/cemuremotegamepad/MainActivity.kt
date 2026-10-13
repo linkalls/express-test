@@ -96,7 +96,7 @@ class MainActivity : Activity() {
                 if (wifiClient != null) {
                     wifiClient?.stop()
                     wifiClient = null
-                    wifiSurface.visibility = View.GONE
+                    wifiSurface.visibility = View.VISIBLE
                     image.visibility = View.VISIBLE
                     text = "Wi-Fi TLSで接続"
                 } else {
@@ -118,7 +118,7 @@ class MainActivity : Activity() {
                         wifiClient = client
                         text = "Wi-Fi切断"
                     } catch (error: Exception) {
-                        wifiSurface.visibility = View.GONE
+                        wifiSurface.visibility = View.VISIBLE
                         image.visibility = View.VISIBLE
                         status.text = "Wi-Fi設定エラー: " + error.message
                     }
@@ -139,15 +139,17 @@ class MainActivity : Activity() {
                 true
             }
         }
-        display.addView(image, FrameLayout.LayoutParams(-1, -1))
         wifiSurface = SurfaceView(this).apply {
-            visibility = View.GONE
+            visibility = View.VISIBLE
             setOnTouchListener { _, event ->
                 sendWifiTouch(event)
                 true
             }
         }
         display.addView(wifiSurface, FrameLayout.LayoutParams(-1, -1))
+        // The USB ImageView covers this surface until Wi-Fi is selected.
+        // Keeping the SurfaceView attached avoids invalid Surface on first tap.
+        display.addView(image, FrameLayout.LayoutParams(-1, -1))
         root.addView(display, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(root)
     }
