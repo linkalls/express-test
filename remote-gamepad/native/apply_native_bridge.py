@@ -28,9 +28,13 @@ def patch_render_target(cemu: Path) -> None:
     if (renderTarget & RENDER_TARGET_DRC)
     {
         RemoteGamePad::Start();
-        if (RemoteGamePad::Connected())
+        if (RemoteGamePad::Connected() || RemoteGamePadVideo::Connected())
         {
-            RemoteGamePad::RequestNativeFrameIfDue(g_renderer.get());
+            // Vulkan's legacy screenshot path still uses a blocking GPU wait,
+            // so it remains at 8fps until the Vulkan async pipeline is added.
+            // OpenGL has its own bounded 60Hz PBO+fence producer instead.
+            if (g_renderer->GetType() != RendererAPI::OpenGL || RemoteGamePad::Connected())
+                RemoteGamePad::RequestNativeFrameIfDue(g_renderer.get());
 
             // Cemu ordinarily processes the DRC screenshot request from
             // LatteRenderTarget_copyToBackbuffer() when the pad window is open.
@@ -77,6 +81,27 @@ def patch_touch(cemu: Path) -> None:
     source = replace_once(source, anchor, injection + anchor, str(target))
     target.write_text(source, encoding="utf-8")
 
+def patch_opengl(cemu: Path) -> None:
+    """Direct non-blocking PBO capture is inserted into native GL backend."""
+    target = cemu / "src/Cafe/HW/Latte/Renderer/OpenGL/OpenGLRenderer.cpp"
+    source = target.read_text(encoding="utf-8")
+    if 'remote/RemoteGamePadAsyncGL.inc' in source:
+        raise RuntimeError("OpenGL async capture overlay already applied")
+    source = replace_once(
+        source,
+        '#include "config/LaunchSettings.h"',
+        '#include "config/LaunchSettings.h"\n#include "remote/RemoteGamePadAsyncGL.inc"',
+        str(target),
+    )
+    anchor = "void OpenGLRenderer::HandleScreenshotRequest(LatteTextureView* texView, bool padView)\n{\n"
+    injected = (
+        "    // Independent native DRC streaming: never waits for a GL readback.\n"
+        "    RemoteGamePadAsyncGL::Capture(texView, padView);\n"
+    )
+    source = replace_once(source, anchor, anchor + injected, str(target))
+    target.write_text(source, encoding="utf-8")
+
+
 def main() -> None:
     if len(sys.argv) != 3:
         raise SystemExit("Usage: apply_native_bridge.py <Cemu source root> <bridge header>")
@@ -87,8 +112,14 @@ def main() -> None:
     dest = cemu / "src/remote/RemoteGamePadBridge.h"
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(header, dest)
+    for extra in ("RemoteGamePadVideo.h", "RemoteGamePadAsyncGL.inc"):
+        sibling = header.parent / extra
+        if not sibling.is_file():
+            raise FileNotFoundError(sibling)
+        shutil.copyfile(sibling, dest.parent / extra)
     patch_render_target(cemu)
     patch_touch(cemu)
+    patch_opengl(cemu)
     print("Native GamePad USB bridge injected into Cemu DRC and VPAD code.")
 
 if __name__ == "__main__":
