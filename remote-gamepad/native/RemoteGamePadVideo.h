@@ -20,6 +20,8 @@
 #include <windows.h>
 #include <openssl/ssl.h>
 #include <openssl/rsa.h>
+#include <openssl/rand.h>
+#include <openssl/crypto.h>
 #include <openssl/err.h>
 #include <openssl/pem.h>
 #include <openssl/x509.h>
@@ -119,6 +121,43 @@ inline bool createCertificate(const std::filesystem::path& file)
     EVP_PKEY_free(key);
     EVP_PKEY_CTX_free(context);
     return ok;
+}
+
+inline std::string loadOrCreateAccessToken()
+{
+    const auto file = configDir() / "wifi-access-token.txt";
+    std::ifstream in(file);
+    std::string token;
+    if (in >> token) {
+        if (token.size() == 32 && token.find_first_not_of("0123456789ABCDEFabcdef") == std::string::npos)
+            return token;
+        report("Invalid Wi-Fi access token file; refusing to start.");
+        return {};
+    }
+    unsigned char secret[16]{};
+    if (RAND_bytes(secret, sizeof(secret)) != 1)
+        return {};
+    constexpr char digits[] = "0123456789ABCDEF";
+    for (unsigned char c : secret) {
+        token += digits[c >> 4];
+        token += digits[c & 15];
+    }
+    std::ofstream output(file, std::ios::trunc);
+    output << token << "\n";
+    if (!output.good()) return {};
+    report("Wi-Fi access token generated; copy token from " + file.string());
+    return token;
+}
+
+inline bool sslReadExact(SSL* connection, unsigned char* bytes, size_t length)
+{
+    while (length) {
+        const int n = SSL_read(connection, bytes, static_cast<int>(length));
+        if (n <= 0) return false;
+        bytes += n;
+        length -= static_cast<size_t>(n);
+    }
+    return true;
 }
 
 inline std::unique_ptr<SSL_CTX, decltype(&SSL_CTX_free)> sslContext()
@@ -271,6 +310,24 @@ inline void clientSession(SSL_CTX* context, SOCKET socket)
         return;
     }
 
+    // Mutual application authentication: TLS protects the channel while the
+    // PC requires a high-entropy secret token before releasing gameplay video
+    // or processing any remote inputs. The public certificate pin is NOT a
+    // substitute for this private token.
+    const std::string accessToken = loadOrCreateAccessToken();
+    std::array<unsigned char, 36> auth{};
+    const bool authorized = accessToken.size() == 32 &&
+        sslReadExact(ssl, auth.data(), auth.size()) &&
+        std::memcmp(auth.data(), "AUTH", 4) == 0 &&
+        CRYPTO_memcmp(auth.data() + 4, accessToken.data(), 32) == 0;
+    if (!authorized) {
+        report("Rejected unauthenticated Wi-Fi client");
+        SSL_shutdown(ssl);
+        SSL_free(ssl);
+        closesocket(socket);
+        return;
+    }
+
     std::mutex sslLock;
     std::atomic<bool> running{true};
     EncoderPipe encoder;
@@ -289,6 +346,11 @@ inline void clientSession(SSL_CTX* context, SOCKET socket)
         encoder.stop();
         if (inputWorker.joinable()) inputWorker.join();
         if (outputWorker.joinable()) outputWorker.join();
+        // Release any pressed touch when the Wi-Fi session disappears.
+        if (touchConsumer) {
+            const uint8_t release[9]{'T','C','H','1',0,0,0,0,0};
+            touchConsumer(release, sizeof(release));
+        }
         SSL_shutdown(ssl);
         SSL_free(ssl);
         closesocket(socket);
