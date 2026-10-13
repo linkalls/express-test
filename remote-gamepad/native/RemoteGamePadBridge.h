@@ -34,8 +34,11 @@
 // Unit-test-only adapter: the real build always includes OpenSSL/TLS backend.
 #include <functional>
 namespace RemoteGamePadVideo {
+    // Compile-test-only switch: simulate an authenticated TLS peer without
+    // creating sockets or depending on a real Cemu/Vulkan/OpenGL runtime.
+    inline bool mockConnected = false;
     inline void Start(std::function<void(const uint8_t*, size_t)>) {}
-    inline bool Connected() { return false; }
+    inline bool Connected() { return mockConnected; }
     inline void OfferFrame(std::vector<uint8_t>, int, int) {}
 }
 #endif
