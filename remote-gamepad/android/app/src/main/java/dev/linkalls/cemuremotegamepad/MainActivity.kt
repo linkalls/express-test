@@ -73,7 +73,9 @@ class MainActivity : Activity() {
         toolbar.addView(button, LinearLayout.LayoutParams(-2, -2))
         root.addView(toolbar)
         val wifiControls = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
+            // Full-width rows keep the 64-hex TLS certificate fingerprint
+            // and 32-hex access token usable on narrow Android screens.
+            orientation = LinearLayout.VERTICAL
             setPadding(8, 4, 8, 4)
         }
         val prefs = getSharedPreferences("cemu-remote-wifi", MODE_PRIVATE)
@@ -99,14 +101,14 @@ class MainActivity : Activity() {
             inputType = InputType.TYPE_CLASS_TEXT
         }
         wifiButton = Button(this).apply {
-            text = "Wi-Fi TLSで接続"
+            text = "H.264接続（Wi-Fi / USB）"
             setOnClickListener {
                 if (wifiClient != null) {
                     wifiClient?.stop()
                     wifiClient = null
                     wifiSurface.visibility = View.VISIBLE
                     image.visibility = View.VISIBLE
-                    text = "Wi-Fi TLSで接続"
+                    text = "H.264接続（Wi-Fi / USB）"
                 } else {
                     val host = wifiHost.text.toString().trim()
                     val pin = wifiPin.text.toString().trim()
@@ -134,10 +136,10 @@ class MainActivity : Activity() {
                 }
             }
         }
-        wifiControls.addView(wifiHost, LinearLayout.LayoutParams(0, -2, 1f))
-        wifiControls.addView(wifiPin, LinearLayout.LayoutParams(0, -2, 2f))
-        wifiControls.addView(wifiToken, LinearLayout.LayoutParams(0, -2, 1f))
-        wifiControls.addView(wifiButton, LinearLayout.LayoutParams(-2, -2))
+        wifiControls.addView(wifiHost, LinearLayout.LayoutParams(-1, -2))
+        wifiControls.addView(wifiPin, LinearLayout.LayoutParams(-1, -2))
+        wifiControls.addView(wifiToken, LinearLayout.LayoutParams(-1, -2))
+        wifiControls.addView(wifiButton, LinearLayout.LayoutParams(-1, -2))
         root.addView(wifiControls)
         val display = FrameLayout(this)
         image = ImageView(this).apply {
