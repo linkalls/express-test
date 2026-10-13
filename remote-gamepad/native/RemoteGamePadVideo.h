@@ -454,6 +454,13 @@ inline void server()
     if (WSAStartup(MAKEWORD(2,2), &ws) != 0) return;
     auto context = sslContext();
     if (!context) { report("Wi-Fi TLS initialization failed"); WSACleanup(); return; }
+    // Generate the access token before accepting clients. The user needs the
+    // token file for pairing even when no smartphone has connected yet.
+    if (loadOrCreateAccessToken().size() != 32) {
+        report("Wi-Fi access-token initialization failed");
+        WSACleanup();
+        return;
+    }
 
     SOCKET listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (listener == INVALID_SOCKET) { WSACleanup(); return; }
