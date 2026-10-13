@@ -28,10 +28,12 @@ import javax.net.ssl.X509TrustManager
 class WifiGamePadClient(
     private val host: String,
     fingerprint: String,
+    token: String,
     private val surface: Surface,
     private val onState: (String) -> Unit
 ) {
     private val expectedPin = fingerprint.filter { it.isLetterOrDigit() }.uppercase()
+    private val accessToken = token.filter { it.isLetterOrDigit() }.uppercase()
     private var worker: Thread? = null
     @Volatile private var connected = false
     @Volatile private var socket: SSLSocket? = null
@@ -40,6 +42,9 @@ class WifiGamePadClient(
     fun start() {
         require(expectedPin.matches(Regex("[0-9A-F]{64}"))) {
             "PCの証明書SHA256フィンガープリント（64桁）が必要"
+        }
+        require(accessToken.matches(Regex("[0-9A-F]{32}"))) {
+            "PC接続用トークン（32桁）が必要"
         }
         require(host.isNotBlank()) { "PCのIPアドレスを入力してね" }
         if (worker != null) return
@@ -73,6 +78,10 @@ class WifiGamePadClient(
                     error("PCの証明書が一致しません。接続を拒否しました")
                 }
 
+                // Authenticate the handset to the PC before the server sends
+                // any video or accepts touch input. The token stays inside TLS.
+                tls.outputStream.write(("AUTH" + accessToken).toByteArray(Charsets.US_ASCII))
+                tls.outputStream.flush()
                 output = tls.outputStream
                 connected = true
                 onState("暗号化されたWi-Fi接続：映像待機中")
