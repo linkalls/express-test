@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "Cafe/HW/Latte/Renderer/Renderer.h"
+#include "remote/RemoteGamePadVideo.h"
 
 namespace RemoteGamePad
 {
@@ -205,6 +206,12 @@ namespace RemoteGamePad
         std::call_once(detail::serverOnce, [] {
             std::thread([] { detail::ServerLoop(); }).detach();
         });
+        // Wi-Fi is opt-in. Its channel is TLS1.3 and requires a manually
+        // verified SHA256 fingerprint on Android (no unauthenticated LAN).
+        RemoteGamePadVideo::Start([](const uint8_t* bytes, size_t length) {
+            std::vector<uint8_t> control(bytes, bytes + length);
+            detail::ProcessTouchPackets(control);
+        });
     }
 
     inline bool Connected()
@@ -226,7 +233,7 @@ namespace RemoteGamePad
     // by Cemu's existing screenshot machinery.
     inline void RequestNativeFrameIfDue(Renderer* renderer)
     {
-        if (!Connected() || !renderer)
+        if ((!Connected() && !RemoteGamePadVideo::Connected()) || !renderer)
             return;
 
         const uint64_t now = detail::MonotonicMs();
@@ -244,7 +251,7 @@ namespace RemoteGamePad
             -> std::optional<std::string>
         {
             detail::capturePending.store(false, std::memory_order_release);
-            if (mainWindow || !Connected() || width <= 0 || height <= 0 ||
+            if (mainWindow || (!Connected() && !RemoteGamePadVideo::Connected()) || width <= 0 || height <= 0 ||
                 width > 4096 || height > 4096 ||
                 rgb.size() != static_cast<size_t>(width) * static_cast<size_t>(height) * 3)
                 return std::nullopt;
@@ -253,6 +260,9 @@ namespace RemoteGamePad
             frame.height = static_cast<uint32_t>(height);
             frame.sequence = detail::nextSequence.fetch_add(1);
             frame.rgb = rgb;
+            if (RemoteGamePadVideo::Connected())
+                RemoteGamePadVideo::OfferFrame(frame.rgb, width, height);
+            if (!Connected()) return std::nullopt;
             std::lock_guard lock(detail::frameMutex);
             detail::latestFrame = std::move(frame);
             return std::nullopt;
