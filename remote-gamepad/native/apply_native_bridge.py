@@ -98,6 +98,9 @@ def patch_opengl(cemu: Path) -> None:
         "    RemoteGamePadAsyncGL::Capture(texView, padView);\n"
     )
     source = replace_once(source, anchor, anchor + injected, str(target))
+    destructor = "OpenGLRenderer::~OpenGLRenderer()\n{\n"
+    source = replace_once(source, destructor,
+                          destructor + "\tRemoteGamePadAsyncGL::Shutdown();\n", str(target))
     target.write_text(source, encoding="utf-8")
 
 
@@ -108,7 +111,8 @@ def patch_vulkan(cemu: Path) -> None:
     method = "\tvoid HandleScreenshotRequest(LatteTextureView* texView, bool padView) override;"
     header_text = replace_once(
         header_text, method,
-        method + "\n\tvoid RemoteGamePadCaptureAsync(LatteTextureView* texView, bool padView);",
+        method + "\n\tvoid RemoteGamePadCaptureAsync(LatteTextureView* texView, bool padView);"
+        + "\n\tvoid RemoteGamePadReleaseAsync();",
         str(header),
     )
     header.write_text(header_text, encoding="utf-8")
@@ -121,6 +125,10 @@ def patch_vulkan(cemu: Path) -> None:
         "    RemoteGamePadCaptureAsync(texView, padView);\n"
     )
     source = replace_once(original, anchor, anchor + added, str(target))
+    shutdown_anchor = ("void VulkanRenderer::Shutdown()\n{\n"
+                       "\tSubmitCommandBuffer();\n\tWaitDeviceIdle();\n")
+    source = replace_once(source, shutdown_anchor,
+                          shutdown_anchor + "\tRemoteGamePadReleaseAsync();\n", str(target))
     source += '\n#include "remote/RemoteGamePadAsyncVk.inc"\n'
     target.write_text(source, encoding="utf-8")
 
