@@ -437,11 +437,19 @@ inline void clientSession(SSL_CTX* context, SOCKET socket)
             }
             if (n <= 0) break;
             control.insert(control.end(), buf, buf + n);
-            if (touchConsumer) touchConsumer(control.data(), control.size());
-            // Touch protocol is fixed-size and starts with "TCH1".
-            // Keep trailing incomplete messages for the next read.
-            size_t complete = control.size() / 9 * 9;
-            if (complete) control.erase(control.begin(), control.begin() + complete);
+            // TLS is a byte stream, not a packet transport: one SSL_read
+            // can contain a partial touch message, several messages, or
+            // garbage preceding the next valid TCH1 synchronization word.
+            // Forward only complete, validated packets and retain leftovers.
+            while (control.size() >= 9) {
+                if (std::memcmp(control.data(), "TCH1", 4) != 0) {
+                    control.erase(control.begin());
+                    continue;
+                }
+                if (touchConsumer)
+                    touchConsumer(control.data(), 9);
+                control.erase(control.begin(), control.begin() + 9);
+            }
             if (control.size() > 1024) control.clear();
         }
     }
