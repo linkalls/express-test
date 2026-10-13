@@ -28,7 +28,17 @@
 #include <vector>
 
 #include "Cafe/HW/Latte/Renderer/Renderer.h"
+#ifndef REMOTE_GAMEPAD_VIDEO_MOCK
 #include "remote/RemoteGamePadVideo.h"
+#else
+// Unit-test-only adapter: the real build always includes OpenSSL/TLS backend.
+#include <functional>
+namespace RemoteGamePadVideo {
+    inline void Start(std::function<void(const uint8_t*, size_t)>) {}
+    inline bool Connected() { return false; }
+    inline void OfferFrame(std::vector<uint8_t>, int, int) {}
+}
+#endif
 
 namespace RemoteGamePad
 {
