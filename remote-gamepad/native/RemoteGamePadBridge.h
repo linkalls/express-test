@@ -231,7 +231,8 @@ namespace RemoteGamePad
 
     inline bool GetPressedTouch(float& normalizedX, float& normalizedY)
     {
-        if (!Connected() || !detail::touchPressed.load(std::memory_order_acquire))
+        if ((!Connected() && !RemoteGamePadVideo::Connected()) ||
+            !detail::touchPressed.load(std::memory_order_acquire))
             return false;
         normalizedX = static_cast<float>(detail::touchX.load(std::memory_order_relaxed)) / 65535.0f;
         normalizedY = static_cast<float>(detail::touchY.load(std::memory_order_relaxed)) / 65535.0f;
